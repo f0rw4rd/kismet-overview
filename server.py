@@ -269,7 +269,7 @@ class DeviceManager:
             for device in devices:
                 if search_field == "all":
                     # Search in all relevant fields
-                    searchable_text = f"{device['type']} {device['mac']} {device['vendor']} {device['name']} {device['channel']}".lower()
+                    searchable_text = f"{device['type']} {device['mac']} {device['vendor']} {device['name']} {device['channel']} {device['comment']}".lower()
                     if search_query in searchable_text:
                         filtered_devices.append(device)
                 else:
@@ -289,6 +289,7 @@ class DeviceManager:
             "last_seen",
             "channel",
             "packets",
+            "comment",
         ][sort_column]
         reverse = not sort_asc
 
@@ -390,6 +391,43 @@ def convert_kismet_to_json(kismet_file, json_file):
         return False
 
 
+def parse_ssid_maps(device, device_info, field):
+    if field in device["dot11.device"]:
+        ssids = ""
+        for x in device["dot11.device"][field]:
+            if "dot11.probedssid.ssid" in x:
+                ssid = x.get("dot11.probedssid.ssid", "")
+                if ssid:
+                    device_info["comment"] += " Probd: " + ssid
+
+            if "dot11.advertisedssid.ssid" in x:
+                ssid = x.get("dot11.advertisedssid.ssid")
+                if (
+                    ssid not in ssids
+                    and not ssid == device["kismet.device.base.commonname"]
+                ):
+                    ssids += " " + ssid
+
+            wps = ""
+            if "dot11.advertisedssid.wps_state" in x:
+                state = x.get("dot11.advertisedssid.wps_state")
+                if state == 1 or state == 2:
+                    state = "enabled"
+                elif state == 0:  # disabled
+                    continue
+                else:
+                    state = f"unkn ({state})"
+                wps += state
+            if "dot11.advertisedssid.wps_manuf" in x:
+                wps += " manuf: " + x.get("dot11.advertisedssid.wps_manuf")
+            if "dot11.advertisedssid.wps_model_name" in x:
+                wps += " model: " + x.get("dot11.advertisedssid.wps_model_name")
+            if wps:
+                device_info["comment"] += " WPS: " + wps
+        if ssids:
+            device_info["comment"] += " SSID: " + ssids
+
+
 def parse_json_file(json_file, source_file):
     """Parse the JSON file and extract device information."""
     print_debug(f"Parsing JSON file: {json_file}")
@@ -426,10 +464,27 @@ def parse_json_file(json_file, source_file):
                 "packets": device.get("kismet.device.base.packets.total", 0),
                 "longitude": longitude,
                 "latitude": latitude,
-                "comment": "",
+                "comment": device.get("kismet.device.base.crypt", "")
+                + " freq: "
+                + str(device.get("kismet.device.base.frequency") / 1000),
                 "sources": [source_file],
             }
             devices.append(device_info)
+
+            if "dot11.device" in device:
+                parse_ssid_maps(device, device_info, "dot11.device.advertised_ssid_map")
+                parse_ssid_maps(device, device_info, "dot11.device.responded_ssid_map")
+                parse_ssid_maps(device, device_info, "dot11.device.probed_ssid_map")
+                if "dot11.device.associated_client_map" in device["dot11.device"]:
+                    device_info["comment"] += " Clt: " + " , ".join(
+                        [
+                            x
+                            for x in device["dot11.device"][
+                                "dot11.device.associated_client_map"
+                            ]
+                        ]
+                    )
+
         print_debug(f"Successfully parsed {len(devices)} devices")
         return devices
     except Exception as e:
