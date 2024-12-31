@@ -317,52 +317,6 @@ class DeviceManager:
         return devices
 
 
-class CustomHandler(SimpleHTTPRequestHandler):
-    def send_json_response(self, data):
-        self.send_response(200)
-        self.send_header("Content-type", "application/json")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
-
-    def do_GET(self):
-        parsed_url = urlparse(self.path)
-
-        if parsed_url.path == "/":
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            self.wfile.write(HTML_CONTENT.encode())
-
-        elif parsed_url.path == "/devices":
-            query = parse_qs(parsed_url.query)
-            page = int(query.get("page", ["1"])[0])
-            search = query.get("search", [""])[0]
-            field = query.get("field", ["all"])[0]
-            sort_column = int(query.get("sort", ["0"])[0])
-            sort_asc = query.get("order", ["asc"])[0] == "asc"
-
-            device_manager = DeviceManager()
-            filtered_devices = device_manager.filter_devices(
-                search, field, sort_column, sort_asc
-            )
-
-            start_idx = (page - 1) * PAGE_SIZE
-            end_idx = start_idx + PAGE_SIZE
-
-            response_data = {
-                "devices": filtered_devices[start_idx:end_idx],
-                "total": len(filtered_devices),
-                "page": page,
-                "pages": (len(filtered_devices) + PAGE_SIZE - 1) // PAGE_SIZE,
-            }
-
-            self.send_json_response(response_data)
-
-        else:
-            super().do_GET()
-
-
 def update_merged_devices():
     print_debug("Starting device update cycle")
     device_manager = DeviceManager()
@@ -486,22 +440,49 @@ def parse_json_file(json_file, source_file):
 
 
 class CustomHandler(SimpleHTTPRequestHandler):
-    def log_message(self, format, *args):
-        """Override to add timestamp to server logs"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{timestamp}] {self.address_string()} - {format%args}")
+    def send_json_response(self, data):
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
 
     def do_GET(self):
-        print_debug(f"Received GET request for: {self.path}")
-        if self.path == "/":
+        parsed_url = urlparse(self.path)
+
+        if parsed_url.path == "/":
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
             self.wfile.write(HTML_CONTENT.encode())
-            print_debug("Served main HTML page")
+
+        elif parsed_url.path == "/devices":
+            query = parse_qs(parsed_url.query)
+            page = int(query.get("page", ["1"])[0])
+            search = query.get("search", [""])[0]
+            field = query.get("field", ["all"])[0]
+            sort_column = int(query.get("sort", ["0"])[0])
+            sort_asc = query.get("order", ["asc"])[0] == "asc"
+
+            device_manager = DeviceManager()
+            filtered_devices = device_manager.filter_devices(
+                search, field, sort_column, sort_asc
+            )
+
+            start_idx = (page - 1) * PAGE_SIZE
+            end_idx = start_idx + PAGE_SIZE
+
+            response_data = {
+                "devices": filtered_devices[start_idx:end_idx],
+                "total": len(filtered_devices),
+                "page": page,
+                "pages": (len(filtered_devices) + PAGE_SIZE - 1) // PAGE_SIZE,
+            }
+
+            self.send_json_response(response_data)
+
         else:
             super().do_GET()
-            print_debug(f"Served file: {self.path}")
 
 
 def run_http_server():
