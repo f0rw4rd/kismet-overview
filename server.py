@@ -4,6 +4,7 @@ import os
 import subprocess
 import threading
 import time
+import gzip
 import logging
 from datetime import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -239,32 +240,37 @@ def setup_logger():
 logger = setup_logger()
 
 
+def store_merged_devices(data):
+    filepath = os.path.join(KISMET_DIR, "merged_devices.json.gz")
+    with gzip.open(filepath, "wt", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def load_merged_devices():
+    filepath = os.path.join(KISMET_DIR, "merged_devices.json.gz")
+    with gzip.open(filepath, "rt", encoding="utf-8") as f:
+        return json.load(f)
+
+
 class DeviceManager:
     def __init__(self):
         self.load_devices()
 
     def load_devices(self):
         """Load existing merged devices file if it exists"""
-        merged_file = os.path.join(KISMET_DIR, "merged_devices.json")
-        if os.path.exists(merged_file):
-            try:
-                with open(merged_file, "r") as f:
-                    devices = json.load(f)
-                    all_devices.clear()
-                    for device in devices:
-                        all_devices[device["mac"]] = device
-                print_debug(
-                    f"Loaded {len(all_devices)} devices from existing merged file"
-                )
-            except Exception as e:
-                print_debug(f"Error loading merged devices: {str(e)}")
+        try:
+            devices = load_merged_devices()
+            all_devices.clear()
+            for device in devices:
+                all_devices[device["mac"]] = device
+            print_debug(f"Loaded {len(all_devices)} devices from existing merged file")
+        except Exception as e:
+            print_debug(f"Error loading merged devices: {str(e)}")
 
     def save_devices(self):
         """Save current devices to merged file"""
-        merged_file = os.path.join(KISMET_DIR, "merged_devices.json")
         try:
-            with open(merged_file, "w") as f:
-                json.dump(list(all_devices.values()), f, indent=2)
+            store_merged_devices(list(all_devices.values()))
             print_debug("Successfully saved merged devices file")
         except Exception as e:
             print_debug(f"Error saving merged devices: {str(e)}")
@@ -543,12 +549,8 @@ def update_merged_devices():
 
             processed_files[filename] = current_mod_time
             print_debug(f"Marked {filename} as processed")
-
-    merged_file = os.path.join(KISMET_DIR, "merged_devices.json")
-    print_debug(f"Writing {len(all_devices)} merged devices to {merged_file}")
     try:
-        with open(merged_file, "w") as f:
-            json.dump(list(all_devices.values()), f, indent=2)
+        store_merged_devices(list(all_devices.values()))
         print_debug("Successfully wrote merged devices file")
     except Exception as e:
         print_debug(f"Error writing merged devices file: {str(e)}")
