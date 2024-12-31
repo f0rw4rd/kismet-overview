@@ -30,22 +30,18 @@ HTML_CONTENT = """
     <title>Kismet Device Monitor</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        /* Previous styles remain the same */
-        .pagination {
-            margin-top: 20px;
-            text-align: center;
-        }
+        .pagination { margin-top: 20px; text-align: center; }
         .pagination button {
             padding: 8px 16px;
             margin: 0 4px;
-            cursor: pointer;
             background-color: #4CAF50;
             color: white;
             border: none;
             border-radius: 4px;
+            cursor: pointer;
         }
         .pagination button:disabled {
-            background-color: #cccccc;
+            background-color: #ccc;
             cursor: not-allowed;
         }
         .search-container {
@@ -53,26 +49,22 @@ HTML_CONTENT = """
             display: flex;
             gap: 10px;
         }
-        .search-container input {
-            padding: 8px;
-            flex-grow: 1;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        .search-container select {
+        .search-container input, .search-container select {
             padding: 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
         }
+        .search-container input { flex-grow: 1; }
+        .position-link { color: #0066cc; text-decoration: underline; cursor: pointer; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="status">
-            Last update: <span id="lastUpdate">Never</span>
-            <br>
+            Last update: <span id="lastUpdate">Never</span><br>
             Devices found: <span id="deviceCount">0</span> (Showing page <span id="currentPage">1</span>)
         </div>
+
         <div class="search-container">
             <select id="searchField">
                 <option value="all">All Fields</option>
@@ -81,9 +73,11 @@ HTML_CONTENT = """
                 <option value="vendor">Vendor</option>
                 <option value="name">Name</option>
                 <option value="channel">Channel</option>
+                <option value="comment">Comment</option>
             </select>
             <input type="text" id="searchInput" placeholder="Search devices...">
         </div>
+
         <table id="deviceTable">
             <thead>
                 <tr>
@@ -95,25 +89,30 @@ HTML_CONTENT = """
                     <th onclick="sortTable(5)">Last Seen</th>
                     <th onclick="sortTable(6)">Channel</th>
                     <th onclick="sortTable(7)">Packets</th>
+                    <th onclick="sortTable(8)">Comment</th>
+                    <th>Position</th>
                     <th>Sources</th>
                 </tr>
             </thead>
             <tbody id="deviceList"></tbody>
         </table>
+
         <div class="pagination">
             <button onclick="changePage(-1)" id="prevButton">Previous</button>
             <span id="pageInfo"></span>
             <button onclick="changePage(1)" id="nextButton">Next</button>
         </div>
     </div>
+
     <script>
-        let currentPage = 1;
-        let totalPages = 1;
-        let sortColumn = 0;
-        let sortAsc = true;
-        let lastSearchQuery = '';
-        let lastSearchField = 'all';
+        let currentPage = 1, totalPages = 1, sortColumn = 0, sortAsc = true;
         const PAGE_SIZE = 100;
+
+        function createPositionLink(lat, lon) {
+            if (lat === 0 && lon === 0) return '';
+            return `<a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}&zoom=17" 
+                      target="_blank" class="position-link">${lat.toFixed(6)}, ${lon.toFixed(6)}</a>`;
+        }
 
         function updateDevices() {
             const searchQuery = document.getElementById('searchInput').value;
@@ -136,21 +135,17 @@ HTML_CONTENT = """
                         row.insertCell(5).textContent = device.last_seen;
                         row.insertCell(6).textContent = device.channel;
                         row.insertCell(7).textContent = device.packets;
+                        row.insertCell(8).textContent = device.comment || '';
                         
-                        const sourcesCell = row.insertCell(8);
+                        const positionCell = row.insertCell(9);
+                        positionCell.innerHTML = createPositionLink(device.latitude, device.longitude);
+                        
+                        const sourcesCell = row.insertCell(10);
                         sourcesCell.className = 'sources';
                         device.sources.forEach(source => {
-                            const dbLink = document.createElement('a');
-                            dbLink.href = source;
-                            dbLink.textContent = 'DB';
-                            sourcesCell.appendChild(dbLink);
-                            
-                            const pcapLink = document.createElement('a');
-                            pcapLink.href = source.replace('.kismet', '.pcapng');
-                            pcapLink.textContent = 'PCAP';
-                            sourcesCell.appendChild(pcapLink);
-                            
-                            sourcesCell.appendChild(document.createTextNode(' '));
+                            sourcesCell.innerHTML += `
+                                <a href="${source}">DB</a>
+                                <a href="${source.replace('.kismet', '.pcapng')}">PCAP</a> `;
                         });
                     });
 
@@ -174,36 +169,23 @@ HTML_CONTENT = """
         }
 
         function sortTable(column) {
-            if (sortColumn === column) {
-                sortAsc = !sortAsc;
-            } else {
-                sortColumn = column;
-                sortAsc = true;
-            }
+            sortColumn = column === sortColumn ? sortColumn : column;
+            sortAsc = column === sortColumn ? !sortAsc : true;
             updateDevices();
         }
 
-        // Debounce function for search
-        function debounce(func, wait) {
+        const debounce = (func, wait) => {
             let timeout;
-            return function() {
+            return (...args) => {
                 clearTimeout(timeout);
-                timeout = setTimeout(() => func.apply(this, arguments), wait);
+                timeout = setTimeout(() => func.apply(this, args), wait);
             };
-        }
+        };
 
-        // Add event listeners
         document.getElementById('searchInput').addEventListener('input', 
-            debounce(() => {
-                currentPage = 1;
-                updateDevices();
-            }, 300)
-        );
-
-        document.getElementById('searchField').addEventListener('change', () => {
-            currentPage = 1;
-            updateDevices();
-        });
+            debounce(() => { currentPage = 1; updateDevices(); }, 300));
+        document.getElementById('searchField').addEventListener('change', 
+            () => { currentPage = 1; updateDevices(); });
 
         updateDevices();
         setInterval(updateDevices, 30000);
@@ -414,10 +396,18 @@ def parse_json_file(json_file, source_file):
     try:
         with open(json_file, "r") as f:
             data = json.load(f)
-
         print_debug(f"Found {len(data)} devices in JSON")
         devices = []
         for device in data:
+            # Get location data from the geopoint array [longitude, latitude]
+            location = (
+                device.get("kismet.device.base.location", {})
+                .get("kismet.common.location.avg_loc", {})
+                .get("kismet.common.location.geopoint", [0, 0])
+            )
+            longitude = location[0] if len(location) > 0 else 0
+            latitude = location[1] if len(location) > 1 else 0
+
             device_info = {
                 "type": device.get("kismet.device.base.type", "Unknown"),
                 "mac": device.get("kismet.device.base.macaddr", "Unknown"),
@@ -434,10 +424,12 @@ def parse_json_file(json_file, source_file):
                 ).strftime("%Y-%m-%d %H:%M:%S"),
                 "channel": device.get("kismet.device.base.channel", "Unknown"),
                 "packets": device.get("kismet.device.base.packets.total", 0),
+                "longitude": longitude,
+                "latitude": latitude,
+                "comment": "",
                 "sources": [source_file],
             }
             devices.append(device_info)
-
         print_debug(f"Successfully parsed {len(devices)} devices")
         return devices
     except Exception as e:
