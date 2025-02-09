@@ -11,7 +11,7 @@
             "program": "server.py",
             "console": "integratedTerminal",
             "env": {
-                "KISMET": "test"
+                "KISMET": "/opt/kismet"
             }
         }
     ]

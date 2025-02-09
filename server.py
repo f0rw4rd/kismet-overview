@@ -30,6 +30,7 @@ HTML_CONTENT = """
     <title>Kismet Device Monitor</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
         .pagination { margin-top: 20px; text-align: center; }
         .pagination button {
             padding: 8px 16px;
@@ -56,6 +57,45 @@ HTML_CONTENT = """
         }
         .search-container input { flex-grow: 1; }
         .position-link { color: #0066cc; text-decoration: underline; cursor: pointer; }
+        
+        /* New styles for file selection */
+        .file-selection {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+        }
+        .file-selection h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        .file-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background: white;
+        }
+        .file-list label {
+            display: block;
+            margin: 5px 0;
+        }
+        .file-controls {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        .file-controls button {
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .file-controls button:hover {
+            background-color: #45a049;
+        }
     </style>
 </head>
 <body>
@@ -63,6 +103,19 @@ HTML_CONTENT = """
         <div class="status">
             Last update: <span id="lastUpdate">Never</span><br>
             Devices found: <span id="deviceCount">0</span> (Showing page <span id="currentPage">1</span>)
+        </div>
+
+        <!-- New file selection section -->
+        <div class="file-selection">
+            <h3>Kismet Files</h3>
+            <div id="fileList" class="file-list">
+                <!-- Files will be populated here -->
+            </div>
+            <div class="file-controls">
+                <button onclick="selectAllFiles()">Select All</button>
+                <button onclick="deselectAllFiles()">Deselect All</button>
+                <button onclick="updateDevices()">Apply Selection</button>
+            </div>
         </div>
 
         <div class="search-container">
@@ -106,6 +159,7 @@ HTML_CONTENT = """
 
     <script>
         let currentPage = 1, totalPages = 1, sortColumn = 0, sortAsc = true;
+        let selectedFiles = new Set();
         const PAGE_SIZE = 100;
 
         function createPositionLink(lat, lon) {
@@ -114,10 +168,61 @@ HTML_CONTENT = """
                       target="_blank" class="position-link">${lat.toFixed(6)}, ${lon.toFixed(6)}</a>`;
         }
 
+        async function loadFileList() {
+            try {
+                const response = await fetch('files');
+                const files = await response.json();
+                const fileList = document.getElementById('fileList');
+                fileList.innerHTML = '';
+                
+                files.forEach(file => {
+                    const label = document.createElement('label');
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.value = file;
+                    checkbox.checked = selectedFiles.has(file);
+                    checkbox.onchange = () => {
+                        if (checkbox.checked) {
+                            selectedFiles.add(file);
+                        } else {
+                            selectedFiles.delete(file);
+                        }
+                    };
+                    label.appendChild(checkbox);
+                    label.appendChild(document.createTextNode(` ${file}`));
+                    fileList.appendChild(label);
+                });
+
+                // If no files are selected, select all by default
+                if (selectedFiles.size === 0) {
+                    selectAllFiles();
+                }
+            } catch (error) {
+                console.error('Error loading file list:', error);
+            }
+        }
+
+        function selectAllFiles() {
+            const checkboxes = document.querySelectorAll('#fileList input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = true;
+                selectedFiles.add(checkbox.value);
+            });
+        }
+
+        function deselectAllFiles() {
+            const checkboxes = document.querySelectorAll('#fileList input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = false;
+                selectedFiles.delete(checkbox.value);
+            });
+        }
+
         function updateDevices() {
             const searchQuery = document.getElementById('searchInput').value;
             const searchField = document.getElementById('searchField').value;
-            const url = `devices?page=${currentPage}&search=${encodeURIComponent(searchQuery)}&field=${searchField}&sort=${sortColumn}&order=${sortAsc ? 'asc' : 'desc'}`;
+            const selectedFilesArray = Array.from(selectedFiles);
+            const url = `devices?page=${currentPage}&search=${encodeURIComponent(searchQuery)}&field=${searchField}&sort=${sortColumn}&order=${sortAsc ? 'asc' : 'desc'}&files=${encodeURIComponent(JSON.stringify(selectedFilesArray))}`;
             
             fetch(url)
                 .then(response => response.json())
@@ -187,8 +292,13 @@ HTML_CONTENT = """
         document.getElementById('searchField').addEventListener('change', 
             () => { currentPage = 1; updateDevices(); });
 
+        // Initial load
+        loadFileList();
         updateDevices();
-        setInterval(updateDevices, 30000);
+        setInterval(() => {
+            loadFileList();
+            updateDevices();
+        }, 30000);
     </script>
 </body>
 </html>
@@ -257,11 +367,19 @@ class DeviceManager:
         except Exception as e:
             print_debug(f"Error saving merged devices: {str(e)}")
 
-    def filter_devices(
-        self, search_query="", search_field="all", sort_column=0, sort_asc=True
-    ):
-        """Filter and sort devices based on search criteria"""
-        devices = list(all_devices.values())
+    def filter_devices(self, search_query="", search_field="all", sort_column=0, sort_asc=True, selected_files=None):
+        """Filter and sort devices based on search criteria and selected files"""
+        devices = []
+        
+        # If no files are selected, return empty list
+        if not selected_files:
+            return devices
+            
+        # Filter devices by selected files
+        for device in all_devices.values():
+            # Check if device has any source in selected files
+            if any(source in selected_files for source in device['sources']):
+                devices.append(device)
 
         if search_query:
             search_query = search_query.lower()
@@ -281,15 +399,8 @@ class DeviceManager:
 
         # Sort devices
         sort_key = [
-            "type",
-            "mac",
-            "vendor",
-            "name",
-            "first_seen",
-            "last_seen",
-            "channel",
-            "packets",
-            "comment",
+            "type", "mac", "vendor", "name", "first_seen", 
+            "last_seen", "channel", "packets", "comment"
         ][sort_column]
         reverse = not sort_asc
 
@@ -304,7 +415,6 @@ class DeviceManager:
             devices.sort(key=lambda x: str(x[sort_key]).lower(), reverse=reverse)
 
         return devices
-
 
 def update_merged_devices():
     print_debug("Starting device update cycle")
@@ -508,6 +618,42 @@ class CustomHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-type", "text/html")
             self.end_headers()
             self.wfile.write(HTML_CONTENT.encode())
+
+        elif parsed_url.path == "/files":
+            kismet_files = [f for f in os.listdir(KISMET_DIR) if f.endswith(".kismet.json")]
+            self.send_json_response(kismet_files)
+
+        elif parsed_url.path == "/devices":
+            query = parse_qs(parsed_url.query)
+            page = int(query.get("page", ["1"])[0])
+            search = query.get("search", [""])[0]
+            field = query.get("field", ["all"])[0]
+            sort_column = int(query.get("sort", ["0"])[0])
+            sort_asc = query.get("order", ["asc"])[0] == "asc"
+            
+            # Parse selected files from query
+            files_param = query.get("files", ["[]"])[0]
+            try:
+                selected_files = json.loads(files_param)
+            except json.JSONDecodeError:
+                selected_files = []
+
+            device_manager = DeviceManager()
+            filtered_devices = device_manager.filter_devices(
+                search, field, sort_column, sort_asc, selected_files
+            )
+
+            start_idx = (page - 1) * PAGE_SIZE
+            end_idx = start_idx + PAGE_SIZE
+
+            response_data = {
+                "devices": filtered_devices[start_idx:end_idx],
+                "total": len(filtered_devices),
+                "page": page,
+                "pages": (len(filtered_devices) + PAGE_SIZE - 1) // PAGE_SIZE,
+            }
+
+            self.send_json_response(response_data)
 
         elif parsed_url.path == "/devices":
             query = parse_qs(parsed_url.query)
