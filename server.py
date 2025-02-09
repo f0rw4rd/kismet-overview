@@ -399,6 +399,8 @@ class DeviceManager:
                 with open(os.path.join(KISMET_DIR, json_file), 'r') as f:
                     file_devices = json.load(f)
                     for device in file_devices:
+                        if device.get("kismet.device.base.packets.total", 0) == 0:
+                            continue
                         # Convert device data to our standard format
                         location = (
                             device.get("kismet.device.base.location", {})
@@ -640,6 +642,21 @@ def parse_json_file(json_file, source_file):
                 parse_ssid_maps(device, device_info, "dot11.device.advertised_ssid_map")
                 parse_ssid_maps(device, device_info, "dot11.device.responded_ssid_map")
                 parse_ssid_maps(device, device_info, "dot11.device.probed_ssid_map")
+                if "dot11.device.wpa_handshake_list" in device["dot11.device"]:
+                    handshakes = device["dot11.device"]["dot11.device.wpa_handshake_list"]
+                    handshake_info = []
+                    for mac, handshake_list in handshakes.items():
+                        for handshake in handshake_list:
+                            msg_num = handshake.get("dot11.eapol.message_num", "unknown")
+                            nonce = handshake.get("dot11.eapol.nonce", "")
+                            pmkid = handshake.get("dot11.eapol.rsn_pmkid", "")
+                            if pmkid:
+                                handshake_info.append(f"PMKID:{pmkid}")
+                            if nonce:
+                                handshake_info.append(f"M{msg_num}:{nonce[:16]}...")
+                    if handshake_info:
+                        device_info["comment"] += " Handshake: " + ", ".join(handshake_info)
+                
                 if "dot11.device.associated_client_map" in device["dot11.device"]:
                     device_info["comment"] += " Clt: " + " , ".join(
                         [
