@@ -129,6 +129,7 @@ HTML_CONTENT = """
                 <option value="comment">Comment</option>
             </select>
             <input type="text" id="searchInput" placeholder="Search devices...">
+            <button onclick="downloadCSV()" class="download-btn">Download CSV</button>
         </div>
 
         <table id="deviceTable">
@@ -263,6 +264,23 @@ HTML_CONTENT = """
                     document.getElementById('nextButton').disabled = currentPage >= totalPages;
                 })
                 .catch(error => console.error('Error:', error));
+        }
+
+        function downloadCSV() {
+            // Get current search query value from the search input
+            const searchQuery = document.getElementById('searchInput').value;
+            
+            // Get current search field selection (e.g., "all", "type", "mac", etc.)
+            const searchField = document.getElementById('searchField').value;
+            
+            // Convert the Set of selected files to an array
+            const selectedFilesArray = Array.from(selectedFiles);
+            
+            // Construct the URL with all necessary parameters
+            const url = `devices?download=true&search=${encodeURIComponent(searchQuery)}&field=${searchField}&sort=${sortColumn}&order=${sortAsc ? 'asc' : 'desc'}&files=${encodeURIComponent(JSON.stringify(selectedFilesArray))}`;
+            
+            // Trigger the download by redirecting to the URL
+            window.location.href = url;
         }
 
         function changePage(delta) {
@@ -667,6 +685,7 @@ class CustomHandler(SimpleHTTPRequestHandler):
             field = query.get("field", ["all"])[0]
             sort_column = int(query.get("sort", ["0"])[0])
             sort_asc = query.get("order", ["asc"])[0] == "asc"
+            download = query.get("download", ["false"])[0].lower() == "true"
             
             # Parse selected files from query
             files_param = query.get("files", ["[]"])[0]
@@ -680,42 +699,51 @@ class CustomHandler(SimpleHTTPRequestHandler):
                 search, field, sort_column, sort_asc, selected_files
             )
 
-            start_idx = (page - 1) * PAGE_SIZE
-            end_idx = start_idx + PAGE_SIZE
+            if download:
+                # Prepare CSV response
+                self.send_response(200)
+                self.send_header("Content-type", "text/csv")
+                self.send_header("Content-Disposition", 'attachment; filename="devices.csv"')
+                self.end_headers()
+                
+                # Write CSV header
+                headers = ["Type", "MAC Address", "Vendor", "Name", "First Seen", "Last Seen", 
+                          "Channel", "Packets", "Comment", "Latitude", "Longitude", "Sources"]
+                self.wfile.write(",".join(headers).encode() + b"\n")
+                
+                # Write device data
+                for device in filtered_devices:
+                    row = [
+                        str(device["type"]),
+                        str(device["mac"]),
+                        str(device["vendor"]),
+                        str(device["name"]),
+                        str(device["first_seen"]),
+                        str(device["last_seen"]),
+                        str(device["channel"]),
+                        str(device["packets"]),
+                        str(device["comment"]).replace(",", ";"),  # Replace commas in comments
+                        str(device["latitude"]),
+                        str(device["longitude"]),
+                        ";".join(device["sources"])  # Join sources with semicolon
+                    ]
+                    # Escape quotes and wrap fields in quotes
+                    escaped_row = [f'"{field.replace('"', '""')}"' for field in row]
+                    self.wfile.write(",".join(escaped_row).encode() + b"\n")
+            else:
+                # Regular JSON paginated response
+                page = int(query.get("page", ["1"])[0])
+                start_idx = (page - 1) * PAGE_SIZE
+                end_idx = start_idx + PAGE_SIZE
 
-            response_data = {
-                "devices": filtered_devices[start_idx:end_idx],
-                "total": len(filtered_devices),
-                "page": page,
-                "pages": (len(filtered_devices) + PAGE_SIZE - 1) // PAGE_SIZE,
-            }
+                response_data = {
+                    "devices": filtered_devices[start_idx:end_idx],
+                    "total": len(filtered_devices),
+                    "page": page,
+                    "pages": (len(filtered_devices) + PAGE_SIZE - 1) // PAGE_SIZE,
+                }
 
-            self.send_json_response(response_data)
-
-        elif parsed_url.path == "/devices":
-            query = parse_qs(parsed_url.query)
-            page = int(query.get("page", ["1"])[0])
-            search = query.get("search", [""])[0]
-            field = query.get("field", ["all"])[0]
-            sort_column = int(query.get("sort", ["0"])[0])
-            sort_asc = query.get("order", ["asc"])[0] == "asc"
-
-            device_manager = DeviceManager()
-            filtered_devices = device_manager.filter_devices(
-                search, field, sort_column, sort_asc
-            )
-
-            start_idx = (page - 1) * PAGE_SIZE
-            end_idx = start_idx + PAGE_SIZE
-
-            response_data = {
-                "devices": filtered_devices[start_idx:end_idx],
-                "total": len(filtered_devices),
-                "page": page,
-                "pages": (len(filtered_devices) + PAGE_SIZE - 1) // PAGE_SIZE,
-            }
-
-            self.send_json_response(response_data)
+                self.send_json_response(response_data)
 
         else:
             super().do_GET()
