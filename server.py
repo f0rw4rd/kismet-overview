@@ -346,7 +346,7 @@ def load_merged_devices():
 
 class DeviceManager:
     def __init__(self):
-        self.load_devices()
+        pass
 
     def load_devices(self):
         """Load existing merged devices file if it exists"""
@@ -375,23 +375,60 @@ class DeviceManager:
         if not selected_files:
             return devices
             
-        # Filter devices by selected files
-        for device in all_devices.values():
-            # Check if device has any source in selected files
-            if any(source in selected_files for source in device['sources']):
-                devices.append(device)
+        # Load devices from each selected JSON file
+        for json_file in selected_files:
+            try:
+                with open(os.path.join(KISMET_DIR, json_file), 'r') as f:
+                    file_devices = json.load(f)
+                    for device in file_devices:
+                        # Convert device data to our standard format
+                        location = (
+                            device.get("kismet.device.base.location", {})
+                            .get("kismet.common.location.avg_loc", {})
+                            .get("kismet.common.location.geopoint", [0, 0])
+                        )
+                        longitude = location[0] if len(location) > 0 else 0
+                        latitude = location[1] if len(location) > 1 else 0
 
+                        device_info = {
+                            "type": device.get("kismet.device.base.type", "Unknown"),
+                            "mac": device.get("kismet.device.base.macaddr", "Unknown"),
+                            "vendor": device.get("kismet.device.base.manuf", "Unknown"),
+                            "name": device.get(
+                                "kismet.device.base.commonname",
+                                device.get("kismet.device.base.name", "Unknown"),
+                            ),
+                            "last_seen": datetime.fromtimestamp(
+                                device.get("kismet.device.base.last_time", 0)
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            "first_seen": datetime.fromtimestamp(
+                                device.get("kismet.device.base.first_time", 0)
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            "channel": device.get("kismet.device.base.channel", "Unknown"),
+                            "packets": device.get("kismet.device.base.packets.total", 0),
+                            "longitude": longitude,
+                            "latitude": latitude,
+                            "comment": device.get("kismet.device.base.crypt", "")
+                            + " freq: "
+                            + str(device.get("kismet.device.base.frequency", 0) / 1000),
+                            "sources": [json_file.replace('.json', '')],
+                        }
+                        
+                        # Add device to our list
+                        devices.append(device_info)
+            except Exception as e:
+                print_debug(f"Error loading devices from {json_file}: {str(e)}")
+
+        # Apply search filter
         if search_query:
             search_query = search_query.lower()
             filtered_devices = []
             for device in devices:
                 if search_field == "all":
-                    # Search in all relevant fields
                     searchable_text = f"{device['type']} {device['mac']} {device['vendor']} {device['name']} {device['channel']} {device['comment']}".lower()
                     if search_query in searchable_text:
                         filtered_devices.append(device)
                 else:
-                    # Search in specific field
                     field_value = str(device.get(search_field, "")).lower()
                     if search_query in field_value:
                         filtered_devices.append(device)
@@ -697,9 +734,10 @@ def run_http_server():
     httpd.serve_forever()
 
 
+
 def update_merged_devices():
+    """Modified to handle individual JSON files"""
     print_debug("Starting device update cycle")
-    global processed_files, all_devices
 
     kismet_files = [f for f in os.listdir(KISMET_DIR) if f.endswith(".kismet")]
     print_debug(f"Found {len(kismet_files)} Kismet files")
@@ -714,39 +752,14 @@ def update_merged_devices():
             print_debug(f"Error getting modification time for {filename}: {str(e)}")
             continue
 
-        if filename in processed_files:
-            if processed_files[filename] >= current_mod_time:
-                print_debug(f"Skipping {filename} - already processed")
-                continue
-
-        print_debug(f"Processing {filename}")
+        if (
+            filename in processed_files
+            and processed_files[filename] >= current_mod_time
+        ):
+            continue
 
         if convert_kismet_to_json(kismet_file, json_file):
-            devices = parse_json_file(json_file, filename)
-            print_debug(f"Found {len(devices)} devices in {filename}")
-
-            for device in devices:
-                mac = device["mac"]
-                if mac in all_devices:
-                    if device["last_seen"] > all_devices[mac]["last_seen"]:
-                        print_debug(f"Updating existing device: {mac}")
-                        if filename not in all_devices[mac]["sources"]:
-                            all_devices[mac]["sources"].append(filename)
-                        all_devices[mac].update(device)
-                        all_devices[mac]["sources"] = list(
-                            set(all_devices[mac]["sources"])
-                        )
-                else:
-                    print_debug(f"Adding new device: {mac}")
-                    all_devices[mac] = device
-
             processed_files[filename] = current_mod_time
-            print_debug(f"Marked {filename} as processed")
-    try:
-        store_merged_devices(list(all_devices.values()))
-        print_debug("Successfully wrote merged devices file")
-    except Exception as e:
-        print_debug(f"Error writing merged devices file: {str(e)}")
 
 
 def monitor_kismet_files():
